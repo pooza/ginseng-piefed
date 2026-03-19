@@ -1,0 +1,4 @@
+entries:
+  - namespace: Ginseng::Piefed
+    path: lib/ginseng/piefed
+inflections: {}

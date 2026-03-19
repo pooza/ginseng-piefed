@@ -1,0 +1,19 @@
+package:
+  authors:
+    - Tatsuya Koishi
+  description: ginseng PieFed libraries
+  email:
+    - tkoishi@b-shock.co.jp
+  license: MIT
+  url: https://github.com/pooza/ginseng-piefed
+  version: 0.1.0
+piefed:
+  api:
+    version: alpha
+  community:
+    types:
+      - Subscribed
+      - Local
+      - All
+  subject:
+    max_length: 200
