@@ -1,6 +1,6 @@
 module Ginseng
   module Piefed
-    class Clipper
+    class Service
       include Package
 
       attr_reader :http
