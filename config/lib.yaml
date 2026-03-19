@@ -13,7 +13,8 @@ piefed:
   community:
     types:
       - Subscribed
-      - Local
-      - All
+      - Moderating
+  hosts:
+    default: pf.korako.me
   subject:
-    max_length: 200
+    max_length: 50
