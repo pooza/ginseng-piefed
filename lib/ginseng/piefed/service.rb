@@ -7,13 +7,15 @@ module Ginseng
 
       def initialize(params = {})
         @params = params.deep_symbolize_keys
+        @logger = logger_class.new
+        @config = config_class.instance
         @http = HTTP.new
         @http.base_uri = uri
-        logger.info(clipper: self.class.to_s, method: __method__, url: uri.to_s)
+        @logger.info(clipper: self.class.to_s, method: __method__, url: uri.to_s)
       end
 
       def api_version
-        return config['/piefed/api/version']
+        return @config['/piefed/api/version']
       end
 
       def uri
@@ -58,7 +60,7 @@ module Ginseng
         communities = []
         uri = self.uri.clone
         uri.path = "/api/#{api_version}/community/list"
-        config['/piefed/community/types'].each do |type_|
+        @config['/piefed/community/types'].each do |type_|
           page = 1
           loop do
             uri.query_values = {type_:, page:}
@@ -79,7 +81,7 @@ module Ginseng
         return unless uri&.valid?
         raise Ginseng::RequestError, "URI #{uri} not public" unless uri.public?
         data[:url] = uri.to_s
-        data[:title] ||= uri.subject.ellipsize(config['/piefed/subject/max_length'])
+        data[:title] ||= uri.subject.ellipsize(@config['/piefed/subject/max_length'])
         data[:body] ||= "via: #{uri}"
       end
 

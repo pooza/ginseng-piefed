@@ -6,7 +6,7 @@ package:
     - tkoishi@b-shock.co.jp
   license: MIT
   url: https://github.com/pooza/ginseng-piefed
-  version: 0.1.0
+  version: 0.1.1
 piefed:
   api:
     version: alpha
