@@ -1,0 +1,21 @@
+name: test
+on:
+  push:
+  # ⚠ push 契機だけだと、更新が止まったときに赤へ気づけない。
+  schedule:
+    - cron: '25 0 * * 1'
+env:
+  CI: 'true'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: ${{ matrix.ruby }}
+    strategy:
+      matrix:
+        ruby:
+          - ruby:3.4
+          - ruby:4.0
+    steps:
+      - uses: actions/checkout@v5
+      # ⚠ 手順の正本は pooza/ginseng-style。ここには matrix と schedule だけ置く。
+      - uses: pooza/ginseng-style/.github/actions/ruby-check@main
