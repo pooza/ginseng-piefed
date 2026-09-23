@@ -9,7 +9,17 @@ module Ginseng
         @params = params.deep_symbolize_keys
         @logger = logger_class.new
         @config = config_class.instance
-        @http = HTTP.new
+        # ⚠⚠ **`HTTP` と直に書かない (#15)。** 字面どおり `Ginseng::HTTP` に解決される
+        # ので、**利用側が `http_class` を差し替えても黙って無視される**。
+        # ⚠ 差が出るのは `logger_class` / `config_class` / `environment_class` の側 —
+        # 実測で `tomato-shrieker` の PieFed 宛は、**利用側が足したマスク（`auth`）と
+        # `/http/retry/limit`（3）と User-Agent** が掛かっていなかった。
+        # ⚠⚠ **syslog のプログラム名は変わらない**（`Syslog::Logger` の `@@syslog ||=`
+        # はプロセスに 1 つで、最初に開いた名前に固定される）。
+        # 🔴 **`tomato-shrieker` の `PiefedShrieker` は `include Package` を書いて
+        # いない**ので、いまの利用側 2 本ではこの修正は no-op。向こうが 1 行足して
+        # 初めて効く。⚠ `Ginseng::Piefed::HTTP` は無いので**既定は変わらない**。
+        @http = http_class.new
         @http.base_uri = uri
         @logger.info(clipper: self.class.to_s, method: __method__, url: uri.to_s)
       end
