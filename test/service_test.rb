@@ -38,6 +38,49 @@ module Ginseng
         assert_instance_of(Ginseng::HTTP, @service.http)
       end
 
+      # 公開でないトゥートのクリップは、例外にせず投稿もしない。
+      # ⚠ 通信しない形で測る — ログイン済みにし、トゥートの URI と HTTP を差し替える。
+      def test_clip_skips_non_public_status
+        service = Service.new(url: "https://#{@host}/c/hoge", community: 1)
+        service.instance_variable_set(:@jwt, 'jwt')
+        status = Object.new
+        status.define_singleton_method(:valid?) {true}
+        status.define_singleton_method(:public?) {false}
+        status.define_singleton_method(:to_s) {'https://mstdn.example.com/@a/1'}
+        service.define_singleton_method(:create_status_uri) {|_src| status}
+        posted = []
+        service.http.define_singleton_method(:post) {|*args| posted.push(args)}
+
+        assert_nil(service.clip(url: 'https://mstdn.example.com/@a/1'))
+        assert_empty(posted)
+      end
+
+      # 公開のトゥートは、URI を 1 回だけ解決し、同じものから本文を補完して投稿する。
+      # ⚠ 解決し直すと `fetch_status` が 2 回走る（`TootURI#toot` のメモ化はオブジェクト単位）。
+      def test_clip_resolves_status_uri_once
+        service = Service.new(url: "https://#{@host}/c/hoge", community: 1)
+        service.instance_variable_set(:@jwt, 'jwt')
+        status = Object.new
+        status.define_singleton_method(:valid?) {true}
+        status.define_singleton_method(:public?) {true}
+        status.define_singleton_method(:subject) {'件名'}
+        status.define_singleton_method(:to_s) {'https://mstdn.example.com/@a/1'}
+        resolved = 0
+        service.define_singleton_method(:create_status_uri) do |_src|
+          resolved += 1
+          status
+        end
+        posted = []
+        service.http.define_singleton_method(:post) {|*args| posted.push(args)}
+
+        service.clip(url: 'https://mstdn.example.com/@a/1')
+
+        assert_equal(1, resolved)
+        assert_equal(1, posted.size)
+        assert_equal('件名', posted.first.last[:body][:title])
+        assert_equal('https://mstdn.example.com/@a/1', posted.first.last[:body][:url])
+      end
+
       # ⚠⚠ **利用側が `http_class` を差し替えた形で測る (#15)。**
       # 🔴 既定では `http_class` も直書きの `HTTP` も同じ `Ginseng::HTTP` に解決される
       # ので、**素の `Service` を見ているだけでは直書きに気づけない**。

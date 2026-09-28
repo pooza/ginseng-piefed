@@ -56,8 +56,13 @@ module Ginseng
         body ||= {}
         body.deep_symbolize_keys!
         raise Ginseng::RequestError, 'invalid community' unless @params[:community]
+        # ⚠ トゥートの URI は 1 回だけ解決して使い回す。`TootURI#toot` のメモ化は
+        # オブジェクト単位なので、解決し直すと `fetch_status` がもう 1 回走り、
+        # 2 回目だけが失敗すると `title` が nil のまま下の `gsub` に進む。
+        uri = status_uri(body[:url])
+        return nil unless clippable?(uri)
         data = {community_id: @params[:community], title: body[:name]&.to_s}
-        enrich_data(data, body[:url])
+        enrich_data(data, uri)
         data[:title] = data[:title].gsub(/[\r\n[:blank:]]/, ' ')
         return http.post("/api/#{api_version}/post", {
           body: data,
@@ -85,14 +90,33 @@ module Ginseng
 
       private
 
-      def enrich_data(data, url)
-        return unless url
-        uri = create_status_uri(url)
-        return unless uri&.valid?
-        raise Ginseng::RequestError, "URI #{uri} not public" unless uri.public?
+      # クリップしてよいか。
+      #
+      # ⚠⚠ **公開でないトゥートは例外にせず false を返す。**`public?` は公開範囲
+      # （`visibility == 'public'`）で、弾くのは「非公開の投稿を外部へ転載しない」という
+      # **利用者の操作として正常な結果**。🔴 例外にすると利用側の Sentry に上がり、
+      # Sidekiq の再試行で 1 操作が 4 件に膨らんでいた（mulukhiya-toot-proxy#4750 /
+      # Sentry `MULUKHIYA-TOOT-PROXY-17`）。
+      # ⚠ 弾いたことは warn で残す（黙って消すと、クリップされない理由が誰にも分からない）。
+      def clippable?(uri)
+        return true unless uri
+        return true if uri.public?
+        @logger.warn(clipper: self.class.to_s, method: :clip, message: 'not public', url: uri.to_s)
+        return false
+      end
+
+      def enrich_data(data, uri)
+        return unless uri
         data[:url] = uri.to_s
         data[:title] ||= uri.subject.ellipsize(@config['/piefed/subject/max_length'])
         data[:body] ||= "via: #{uri}"
+      end
+
+      # トゥート（ノート）の URI。URL が無い・読めなければ nil。
+      def status_uri(url)
+        return nil unless url
+        uri = create_status_uri(url)
+        return uri if uri&.valid?
       end
 
       def create_status_uri(src)
