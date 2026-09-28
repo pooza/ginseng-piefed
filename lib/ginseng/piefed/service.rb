@@ -56,9 +56,9 @@ module Ginseng
         body ||= {}
         body.deep_symbolize_keys!
         raise Ginseng::RequestError, 'invalid community' unless @params[:community]
-        # ⚠ トゥートの URI は 1 回だけ解決して使い回す。`TootURI#toot` のメモ化は
-        # オブジェクト単位なので、解決し直すと `fetch_status` がもう 1 回走り、
-        # 2 回目だけが失敗すると `title` が nil のまま下の `gsub` に進む。
+        # ⚠ トゥートの URI は 1 回だけ解決し、公開範囲の判定と本文の補完で使い回す。
+        # `TootURI#toot` のメモ化はオブジェクト単位なので、解決し直すと `fetch_status`
+        # がもう 1 回走り、**判定した投稿と転載する本文が別の取得から来る**。
         uri = status_uri(body[:url])
         return nil unless clippable?(uri)
         data = {community_id: @params[:community], title: body[:name]&.to_s}
@@ -92,12 +92,20 @@ module Ginseng
 
       # クリップしてよいか。
       #
+      # ⚠ URL が無い・読めなければ true。**投稿を取得しないので転載にはならず**、
+      # 投稿されるのは呼び出し側が渡した `name` だけ。
+      #
       # ⚠⚠ **公開でないトゥートは例外にせず false を返す。**`public?` は公開範囲
       # （`visibility == 'public'`）で、弾くのは「非公開の投稿を外部へ転載しない」という
       # **利用者の操作として正常な結果**。🔴 例外にすると利用側の Sentry に上がり、
       # Sidekiq の再試行で 1 操作が 4 件に膨らんでいた（mulukhiya-toot-proxy#4750 /
       # Sentry `MULUKHIYA-TOOT-PROXY-17`）。
       # ⚠ 弾いたことは warn で残す（黙って消すと、クリップされない理由が誰にも分からない）。
+      #
+      # 🔴 **ここで弾けるのは、取得できた投稿だけ**（Mastodon の unlisted、Misskey の
+      # home / followers / specified）。Mastodon の private / direct は匿名の取得が
+      # 404 になるので、ここへ届く前に `GatewayError` が上がる（#21）。⚠ Misskey の
+      # 連合なし（`localOnly`）は public として通ってしまう（#20）。
       def clippable?(uri)
         return true unless uri
         return true if uri.public?
@@ -115,8 +123,7 @@ module Ginseng
       # トゥート（ノート）の URI。URL が無い・読めなければ nil。
       def status_uri(url)
         return nil unless url
-        uri = create_status_uri(url)
-        return uri if uri&.valid?
+        return create_status_uri(url)
       end
 
       def create_status_uri(src)
