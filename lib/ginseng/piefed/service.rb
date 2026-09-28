@@ -56,9 +56,13 @@ module Ginseng
         body ||= {}
         body.deep_symbolize_keys!
         raise Ginseng::RequestError, 'invalid community' unless @params[:community]
-        return nil unless clippable?(body[:url])
+        # ⚠ トゥートの URI は 1 回だけ解決して使い回す。`TootURI#toot` のメモ化は
+        # オブジェクト単位なので、解決し直すと `fetch_status` がもう 1 回走り、
+        # 2 回目だけが失敗すると `title` が nil のまま下の `gsub` に進む。
+        uri = status_uri(body[:url])
+        return nil unless clippable?(uri)
         data = {community_id: @params[:community], title: body[:name]&.to_s}
-        enrich_data(data, body[:url])
+        enrich_data(data, uri)
         data[:title] = data[:title].gsub(/[\r\n[:blank:]]/, ' ')
         return http.post("/api/#{api_version}/post", {
           body: data,
@@ -94,15 +98,15 @@ module Ginseng
       # Sidekiq の再試行で 1 操作が 4 件に膨らんでいた（mulukhiya-toot-proxy#4750 /
       # Sentry `MULUKHIYA-TOOT-PROXY-17`）。
       # ⚠ 弾いたことは warn で残す（黙って消すと、クリップされない理由が誰にも分からない）。
-      def clippable?(url)
-        return true unless uri = status_uri(url)
+      def clippable?(uri)
+        return true unless uri
         return true if uri.public?
         @logger.warn(clipper: self.class.to_s, method: :clip, message: 'not public', url: uri.to_s)
         return false
       end
 
-      def enrich_data(data, url)
-        return unless uri = status_uri(url)
+      def enrich_data(data, uri)
+        return unless uri
         data[:url] = uri.to_s
         data[:title] ||= uri.subject.ellipsize(@config['/piefed/subject/max_length'])
         data[:body] ||= "via: #{uri}"
