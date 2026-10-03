@@ -19,7 +19,15 @@ module Ginseng
         # 🔴 **`tomato-shrieker` の `PiefedShrieker` は `include Package` を書いて
         # いない**ので、いまの利用側 2 本ではこの修正は no-op。向こうが 1 行足して
         # 初めて効く。⚠ `Ginseng::Piefed::HTTP` は無いので**既定は変わらない**。
-        @http = http_class.new
+        #
+        # 🔴🔴 **資格情報を運ぶ要求ではリダイレクトを追わない (#17)。** `clip` /
+        # `communities` は `Authorization: Bearer` を、`login` はパスワードを本文に
+        # 載せる。⚠⚠ HTTParty の既定は追従で、ホストをまたいで外すのは `basic_auth`
+        # だけ — **307 / 308 は本文ごと別ホストへ POST し直す**。
+        # ⚠ 3xx は `GatewayError` になる（`login` では `AuthError`）。宛先は設定された
+        # PieFed 1 つなので、3xx が来た時点で相手が違う。
+        # ⚠ `guard_redirects!` は 2.0.0 より古い core には無いので、床を gemspec に持つ。
+        @http = http_class.new.guard_redirects!
         @http.base_uri = uri
         @logger.info(clipper: self.class.to_s, method: __method__, url: uri.to_s)
       end
