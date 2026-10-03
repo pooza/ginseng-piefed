@@ -103,8 +103,8 @@ module Ginseng
       # ⚠ URL が無い・読めなければ true。**投稿を取得しないので転載にはならず**、
       # 投稿されるのは呼び出し側が渡した `name` だけ。
       #
-      # ⚠⚠ **公開でないトゥートは例外にせず false を返す。**`public?` は公開範囲
-      # （`visibility == 'public'`）で、弾くのは「非公開の投稿を外部へ転載しない」という
+      # ⚠⚠ **公開でないトゥートは例外にせず false を返す。**`public?` は「外へ出して
+      # よい公開範囲か」（`ginseng-fediverse` の判定）。弾くのは「非公開の投稿を外部へ転載しない」という
       # **利用者の操作として正常な結果**。🔴 例外にすると利用側の Sentry に上がり、
       # Sidekiq の再試行で 1 操作が 4 件に膨らんでいた（mulukhiya-toot-proxy#4750 /
       # Sentry `MULUKHIYA-TOOT-PROXY-17`）。
@@ -112,8 +112,11 @@ module Ginseng
       #
       # 🔴 **ここで弾けるのは、取得できた投稿だけ**（Mastodon の unlisted、Misskey の
       # home / followers / specified）。Mastodon の private / direct は匿名の取得が
-      # 404 になるので、ここへ届く前に `GatewayError` が上がる（#21）。⚠ Misskey の
-      # 連合なし（`localOnly`）は public として通ってしまう（#20）。
+      # 404 になるので、ここへ届く前に `GatewayError` が上がる（#21）。
+      # 🔴 **連合なし（Misskey の `localOnly` / glitch-soc の `local_only`）を弾くかは、
+      # 利用側が刺している `ginseng-fediverse` の版で決まる (#20)。** 弾くのは 4.0.0 以降と
+      # 2.0.5 以降の 2.0.x で、**3.0.0〜3.1.4 と 2.0.4 以前では公開として通る**。
+      # ⚠ この gem は fediverse の床を宣言していない（宣言すると 2.0.x 系の利用側を締め出す）。
       def clippable?(uri)
         return true unless uri
         return true if uri.public?
