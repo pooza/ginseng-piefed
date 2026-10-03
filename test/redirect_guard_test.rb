@@ -106,20 +106,6 @@ module Ginseng
         assert_nil(service.instance_variable_get(:@jwt))
       end
 
-      # ⚠⚠ **古い `ginseng-core` では、ガード無しで動かさない。** 🔴 gemspec に core の
-      # 床が無いので、2.0.0 より古い core のまま上がってくる利用側がありうる。
-      def test_old_core_is_refused
-        service = Class.new(Service) do
-          def http_class
-            return Class.new(Ginseng::HTTP) {undef_method :guard_redirects!}
-          end
-        end
-
-        error = assert_raise(Ginseng::ImplementError) {service.new(url: 'https://piefed.example.com/c/hoge')}
-
-        assert_match(/ginseng-core 2\.0\.0/, error.message)
-      end
-
       private
 
       def create(jwt: nil)

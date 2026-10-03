@@ -26,7 +26,8 @@ module Ginseng
         # だけ — **307 / 308 は本文ごと別ホストへ POST し直す**。
         # ⚠ 3xx は `GatewayError` になる（`login` では `AuthError`）。宛先は設定された
         # PieFed 1 つなので、3xx が来た時点で相手が違う。
-        @http = guard_redirects!(http_class.new)
+        # ⚠ `guard_redirects!` は 2.0.0 より古い core には無いので、床を gemspec に持つ。
+        @http = http_class.new.guard_redirects!
         @http.base_uri = uri
         @logger.info(clipper: self.class.to_s, method: __method__, url: uri.to_s)
       end
@@ -96,16 +97,6 @@ module Ginseng
       end
 
       private
-
-      # ⚠⚠ **古い `ginseng-core` では、ガード無しで動かさずに落とす (#17)。**
-      # 🔴 この gem は gemspec で core の床を宣言していないので、**2.0.0 より古い core を
-      # 刺したまま、この gem だけ上げてくる利用側がありうる**。⚠ 素通しすると、
-      # ガードが入ったつもりで入っていない状態になる。
-      def guard_redirects!(http)
-        return http.guard_redirects! if http.respond_to?(:guard_redirects!)
-        raise Ginseng::ImplementError,
-          "ginseng-core 2.0.0 以上が必要です（#{http.class} に guard_redirects! がありません）"
-      end
 
       # クリップしてよいか。
       #
