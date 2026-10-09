@@ -81,6 +81,55 @@ module Ginseng
         assert_equal('https://mstdn.example.com/@a/1', posted.first.last[:body][:url])
       end
 
+      # ⚠ 利用側を模す。**自前のサブクラスで、検証の口を上書きしている。**
+      class OwnTootURI < Ginseng::Fediverse::TootURI
+        def host_validator
+          return nil
+        end
+      end
+
+      class OwnNoteURI < Ginseng::Fediverse::NoteURI
+        def host_validator
+          return nil
+        end
+      end
+
+      # 🔴🔴 **渡された `TootURI` / `NoteURI` を作り直さない (#27)。** ⚠⚠ 文字列へ戻して
+      # gem のクラスで作り直すと、利用側のサブクラスの上書き（`host_validator`）が黙って外れる。
+      def test_clip_keeps_the_given_status_uri_object
+        service = Service.new(url: "https://#{@host}/c/hoge", community: 1)
+        service.instance_variable_set(:@jwt, 'jwt')
+        posted = []
+        service.http.define_singleton_method(:post) {|*args| posted.push(args)}
+        [
+          OwnTootURI.parse('https://mstdn.example.com/@a/1'),
+          OwnNoteURI.parse('https://misskey.example.com/notes/9abc'),
+        ].each do |uri|
+          asked = []
+          uri.define_singleton_method(:public?) {asked.push(:public?) && true}
+          uri.define_singleton_method(:subject) {asked.push(:subject) && '件名'}
+
+          service.clip(url: uri)
+
+          assert_equal([:public?, :subject], asked, uri.class.name)
+          assert_equal(uri.to_s, posted.last.last[:body][:url])
+        end
+      end
+
+      # ⚠ 文字列を渡す利用側は従来どおり（gem のクラスで作る）。
+      # ⚠ `valid?` でないオブジェクトも作り直す — `TootURI` として渡されたノートの URL。
+      def test_create_status_uri_parses_anything_else
+        service = Service.new(url: "https://#{@host}/c/hoge", community: 1)
+
+        toot = service.send(:create_status_uri, 'https://mstdn.example.com/@a/1')
+        note = service.send(:create_status_uri,
+          OwnTootURI.parse('https://misskey.example.com/notes/9abc'))
+
+        assert_instance_of(Ginseng::Fediverse::TootURI, toot)
+        assert_instance_of(Ginseng::Fediverse::NoteURI, note)
+        assert_nil(service.send(:create_status_uri, 'https://example.com/'))
+      end
+
       # ⚠⚠ **利用側が `http_class` を差し替えた形で測る (#15)。**
       # 🔴 既定では `http_class` も直書きの `HTTP` も同じ `Ginseng::HTTP` に解決される
       # ので、**素の `Service` を見ているだけでは直書きに気づけない**。

@@ -137,10 +137,22 @@ module Ginseng
         return create_status_uri(url)
       end
 
+      # 🔴🔴 **渡されたものが既に `TootURI` / `NoteURI` なら、作り直さない (#27)。**
+      # ⚠⚠ 利用側は自前のサブクラスを渡してくる（`Mulukhiya::TootURI` など）。文字列へ
+      # 戻して gem のクラスで作り直すと、**サブクラスの上書きが黙って外れる** —
+      # `ginseng-fediverse 5.0.0` の `host_validator`（自サーバー宛だけ検証を外す口）が
+      # 届かず、自サーバーが内部アドレスに解決される構成では、自サーバーの投稿を
+      # クリップできなくなる（利用側からは外す手段が無い）。
+      # ⚠ `valid?` でないものは従来どおり作り直す（`TootURI` として渡されたノートの URL）。
       def create_status_uri(src)
+        return src if status_uri?(src) && src.valid?
         dest = Ginseng::Fediverse::TootURI.parse(src.to_s)
         dest = Ginseng::Fediverse::NoteURI.parse(dest) unless dest&.valid?
         return dest if dest&.valid?
+      end
+
+      def status_uri?(src)
+        return [Ginseng::Fediverse::TootURI, Ginseng::Fediverse::NoteURI].any? {|c| src.is_a?(c)}
       end
     end
   end
