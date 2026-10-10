@@ -127,6 +127,9 @@ module Ginseng
 
         assert_instance_of(Ginseng::Fediverse::TootURI, toot)
         assert_instance_of(Ginseng::Fediverse::NoteURI, note)
+        # ⚠ `valid?` を持つだけのもの（素の `Ginseng::URI`）は通さない。`public?` が無い。
+        assert_instance_of(Ginseng::Fediverse::TootURI,
+          service.send(:create_status_uri, Ginseng::URI.parse('https://mstdn.example.com/@a/1')))
         assert_nil(service.send(:create_status_uri, 'https://example.com/'))
       end
 
