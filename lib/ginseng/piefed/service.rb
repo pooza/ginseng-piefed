@@ -9,6 +9,7 @@ module Ginseng
         @params = params.deep_symbolize_keys
         @logger = logger_class.new
         @config = config_class.instance
+        @login_mutex = Mutex.new
         # ⚠⚠ **`HTTP` と直に書かない (#15)。** 字面どおり `Ginseng::HTTP` に解決される
         # ので、**利用側が `http_class` を差し替えても黙って無視される**。
         # ⚠ 差が出るのは `logger_class` / `config_class` / `environment_class` の側 —
@@ -49,12 +50,18 @@ module Ginseng
         return @params[:password].decrypt rescue @params[:password]
       end
 
+      # 🔴 **同時に何度もログインしない (#32)。** 利用側は 1 つのインスタンスを複数のスレッドで
+      # 使う（tomato-shrieker の `Parallel.each`）。`@jwt` が入る前に並んだスレッドが、それぞれ
+      # ログインしていた。⚠ 取った後にもう一度 `@jwt` を見る（待っていた側は通信しない）。
       def login
         return if @jwt
-        response = http.post("/api/#{api_version}/user/login", {
-          body: {username:, password:},
-        })
-        @jwt = response['jwt']
+        @login_mutex.synchronize do
+          return if @jwt
+          response = http.post("/api/#{api_version}/user/login", {
+            body: {username:, password:},
+          })
+          @jwt = response['jwt']
+        end
       rescue => e
         raise Ginseng::AuthError, e.message, e.backtrace
       end

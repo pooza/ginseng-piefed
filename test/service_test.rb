@@ -38,6 +38,22 @@ module Ginseng
         assert_instance_of(Ginseng::HTTP, @service.http)
       end
 
+      # 🔴 **並んだスレッドがそれぞれログインしない (#32)。**
+      # ⚠ 通信しない形で測る — HTTP の `post` を、遅い応答に差し替える。
+      def test_login_is_done_once_across_threads
+        service = Service.new(url: "https://#{@host}/c/hoge", user: 'user', password: 'secret')
+        calls = Queue.new
+        service.http.define_singleton_method(:post) do |*|
+          calls.push(true)
+          sleep(0.1)
+          next {'jwt' => 'jwt'}
+        end
+        Array.new(4) {Thread.new {service.login}}.each(&:join)
+
+        assert_equal(1, calls.size)
+        assert_equal('jwt', service.instance_variable_get(:@jwt))
+      end
+
       # 公開でないトゥートのクリップは、例外にせず投稿もしない。
       # ⚠ 通信しない形で測る — ログイン済みにし、トゥートの URI と HTTP を差し替える。
       def test_clip_skips_non_public_status
