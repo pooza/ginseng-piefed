@@ -10,6 +10,7 @@ module Ginseng
         @logger = logger_class.new
         @config = config_class.instance
         @login_mutex = Mutex.new
+        @login_attempts = 0
         # ⚠⚠ **`HTTP` と直に書かない (#15)。** 字面どおり `Ginseng::HTTP` に解決される
         # ので、**利用側が `http_class` を差し替えても黙って無視される**。
         # ⚠ 差が出るのは `logger_class` / `config_class` / `environment_class` の側 —
@@ -53,14 +54,19 @@ module Ginseng
       # 🔴 **同時に何度もログインしない (#32)。** 利用側は 1 つのインスタンスを複数のスレッドで
       # 使う（tomato-shrieker の `Parallel.each`）。`@jwt` が入る前に並んだスレッドが、それぞれ
       # ログインしていた。⚠ 取った後にもう一度 `@jwt` を見る（待っていた側は通信しない）。
+      #
+      # 🔴 **失敗したときも、待っていた側は通信しない (#36)。** 待っていたスレッドがロックを
+      # 取るたびにログインし直し、待ち時間が「HTTP の締切 × 再試行 × スレッド数」まで直列に
+      # 伸びていた（PieFed が落ちている・429 を返しているときに、直列に 4 回叩く）。
+      # ⚠ 試行に番号を振る。待ち始めた後に終わった試行があれば、その失敗を上げ直す。
+      # ⚠ 待ち始める前に失敗していた試行は上げ直さない（次の呼び出しはログインし直す）。
       def login
         return if @jwt
+        attempts = @login_attempts
         @login_mutex.synchronize do
           return if @jwt
-          response = http.post("/api/#{api_version}/user/login", {
-            body: {username:, password:},
-          })
-          @jwt = response['jwt']
+          raise @login_error if @login_error && @login_attempts != attempts
+          attempt_login
         end
       rescue => e
         raise Ginseng::AuthError, e.message, e.backtrace
@@ -103,7 +109,48 @@ module Ginseng
         return communities.to_h {|v| [v.dig('community', 'id').to_i, v.dig('community', 'title')]}
       end
 
+      # ⚠⚠ **資格情報を出さない (#35)。** 既定の `#inspect` も ActiveSupport の `as_json` も
+      # ivar を並べるので、`p service` も `logger.info(service:)` も `password` と `@jwt` を
+      # 平文で出していた（`password` が暗号化された値なら暗号文）。
+      def inspect
+        return "#<#{self.class} host=#{uri.host.inspect} user=#{username.inspect}>"
+      end
+
+      def as_json(*)
+        return {host: uri.host, user: username}
+      end
+
+      def to_json(*)
+        return as_json.to_json(*)
+      end
+
       private
+
+      # ⚠ ロックの中で呼ぶ。成否にかかわらず試行の番号を進める（`login` を参照）。
+      def attempt_login
+        response = http.post("/api/#{api_version}/user/login", {
+          body: {username:, password:},
+        })
+        @jwt = extract_jwt(response)
+        @login_error = nil
+      rescue => e
+        @login_error = e
+        raise
+      ensure
+        @login_attempts += 1
+      end
+
+      # 🔴 **JWT が取れなければ失敗にする (#30 の 2 項目め)。** `@jwt = nil` のまま例外なしで
+      # 戻ると、続く `clip` が空の Bearer で投稿に進む。
+      # ⚠⚠ `response['jwt']` と書かない。`HTTParty::Response#[]` は中身へ委譲するので、
+      # JSON でない応答では `String#[]` になり、**本文に `jwt` の字があればそれを JWT と読む**
+      # （実測: `<html>login with jwt</html>` で `"jwt"`）。
+      def extract_jwt(response)
+        data = response.respond_to?(:parsed_response) ? response.parsed_response : response
+        jwt = data['jwt'] if data.is_a?(Hash)
+        return jwt if jwt.is_a?(String) && jwt.present?
+        raise Ginseng::AuthError, 'login: no jwt in the response'
+      end
 
       # クリップしてよいか。
       #
