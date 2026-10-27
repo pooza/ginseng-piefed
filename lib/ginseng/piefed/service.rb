@@ -109,30 +109,31 @@ module Ginseng
         return communities.to_h {|v| [v.dig('community', 'id').to_i, v.dig('community', 'title')]}
       end
 
-      # ⚠⚠ **資格情報を出さない (#35)。** 既定の `#inspect` も ActiveSupport の `as_json` も
-      # ivar を並べるので、`p service` も `logger.info(service:)` も `password` と `@jwt` を
-      # 平文で出していた（`password` が暗号化された値なら暗号文）。
+      # 🔴 **`inspect` と JSON に資格情報を出さない (#35)。** 既定の `#inspect` も ActiveSupport の
+      # `as_json` も ivar を並べるので、`p service` も `logger.info(service:)` も `password` と
+      # `@jwt` を平文で出していた（`password` が暗号化された値なら暗号文）。
+      # ⚠ `to_json` は ActiveSupport が `as_json` から作る。
+      # ⚠ 塞いだのはこの 2 系統だけ。`instance_values` / `to_yaml` は ivar をそのまま出す。
       def inspect
         return "#<#{self.class} host=#{uri.host.inspect} user=#{username.inspect}>"
       end
 
       def as_json(*)
-        return {host: uri.host, user: username}
-      end
-
-      def to_json(*)
-        return as_json.to_json(*)
+        return {'host' => uri.host, 'user' => username}
       end
 
       private
 
       # ⚠ ロックの中で呼ぶ。成否にかかわらず試行の番号を進める（`login` を参照）。
+      # ⚠⚠ **前の失敗は試行の頭で消す。** `Thread#kill` や `Timeout` で中断された試行は
+      # `rescue` を通らないので、消さないと番号だけが進み、待っていた側が**その試行と
+      # 関係の無い前の失敗**を上げ直す。
       def attempt_login
+        @login_error = nil
         response = http.post("/api/#{api_version}/user/login", {
           body: {username:, password:},
         })
         @jwt = extract_jwt(response)
-        @login_error = nil
       rescue => e
         @login_error = e
         raise
@@ -145,11 +146,16 @@ module Ginseng
       # ⚠⚠ `response['jwt']` と書かない。`HTTParty::Response#[]` は中身へ委譲するので、
       # JSON でない応答では `String#[]` になり、**本文に `jwt` の字があればそれを JWT と読む**
       # （実測: `<html>login with jwt</html>` で `"jwt"`）。
+      # 🔴 **壊れた JSON の本文を例外に載せない。** `parsed_response` は読んだ時点で解析し、
+      # `JSON::ParserError` のメッセージは入力をそのまま含む（実測: `{"jwt": "…", broken` で
+      # JWT ごと載った）。
       def extract_jwt(response)
         data = response.respond_to?(:parsed_response) ? response.parsed_response : response
         jwt = data['jwt'] if data.is_a?(Hash)
         return jwt if jwt.is_a?(String) && jwt.present?
         raise Ginseng::AuthError, 'login: no jwt in the response'
+      rescue JSON::ParserError
+        raise Ginseng::AuthError, 'login: unreadable response'
       end
 
       # クリップしてよいか。

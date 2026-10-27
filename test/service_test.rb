@@ -20,8 +20,8 @@ module Ginseng
         @service = Service.new(url: "https://#{@host}/c/hoge")
       end
 
-      # ⚠ ここでは通信しないものだけを見る。login / clip / communities は
-      # サーバーと資格情報が要るので CI では回せない。
+      # ⚠ 実際の PieFed には繋がない。login / clip / communities は HTTP の `post` / `get` を
+      # 差し替えて測る（サーバーと資格情報が要るので CI では回せない）。
       def test_api_version
         assert_equal(Config.instance['/piefed/api/version'], @service.api_version)
       end
@@ -59,6 +59,8 @@ module Ginseng
         [
           proc {raise Ginseng::GatewayError, 'Bad response 429'},
           proc {{}},
+          proc {{'jwt' => ''}},
+          proc {{'jwt' => 123}},
         ].each do |reply|
           service, calls = stub_login(reply)
           results = Array.new(4) {Thread.new {login_result(service)}}.map(&:value)
@@ -90,7 +92,45 @@ module Ginseng
         assert_nil(service.instance_variable_get(:@jwt))
       end
 
-      # ⚠⚠ **資格情報を出さない (#35)。** 既定の `inspect` / `as_json` は ivar を並べる。
+      # 🔴 **壊れた JSON の本文を例外に載せない。** `JSON::ParserError` は入力を含む。
+      def test_login_hides_unreadable_response
+        body = '{"jwt": "JWT-SECRET", broken'
+        request = HTTParty::Request.new(Net::HTTP::Post, 'https://piefed.example/', format: :json)
+        raw = Net::HTTPOK.new('1.1', '200', 'OK')
+        raw['content-type'] = 'application/json'
+        response = HTTParty::Response.new(request, raw, -> {HTTParty::Parser.call(body, :json)}, body:)
+        service, = stub_login(proc {response})
+        error = login_result(service)
+
+        assert_kind_of(Ginseng::AuthError, error)
+        refute_includes(error.message, 'JWT-SECRET')
+      end
+
+      # ⚠⚠ **中断された試行のあと、待っていた側は前の失敗を上げ直さない。**
+      # 中断（`Exception` 系）は `rescue` を通らず、番号だけが進む。
+      def test_login_after_interrupted_attempt
+        interrupt = Class.new(Exception) # rubocop:disable Lint/InheritException
+        replies = Queue.new
+        replies.push(proc {raise Ginseng::GatewayError, 'Bad response 503'})
+        replies.push(proc {raise interrupt})
+        replies.push(proc {{'jwt' => 'jwt'}})
+        service, calls = stub_login(proc {replies.pop.call})
+
+        assert_kind_of(Ginseng::AuthError, login_result(service))
+        owner = Thread.new do
+          service.login
+        rescue interrupt
+          :interrupted
+        end
+        sleep(0.03)
+        waiter = Thread.new {login_result(service)}
+
+        assert_equal(:interrupted, owner.value)
+        assert_equal(:ok, waiter.value)
+        assert_equal(3, calls.size)
+      end
+
+      # 🔴 **資格情報を出さない (#35)。** 既定の `inspect` / `as_json` は ivar を並べる。
       def test_inspect_and_json_hide_credentials
         service = Service.new(url: "https://#{@host}/c/hoge", user: 'user', password: 'pw-SECRET')
         service.instance_variable_set(:@jwt, 'JWT-SECRET')
@@ -100,7 +140,7 @@ module Ginseng
           refute_includes(dumped, 'pw-SECRET')
           refute_includes(dumped, 'JWT-SECRET')
         end
-        assert_equal({host: @host, user: 'user'}, service.as_json)
+        assert_equal({'host' => @host, 'user' => 'user'}, service.as_json)
       end
 
       # 公開でないトゥートのクリップは、例外にせず投稿もしない。
