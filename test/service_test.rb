@@ -54,6 +54,55 @@ module Ginseng
         assert_equal('jwt', service.instance_variable_get(:@jwt))
       end
 
+      # 🔴 **失敗しても、待っていたスレッドはログインし直さない (#36)。**
+      def test_login_failure_is_shared_across_threads
+        [
+          proc {raise Ginseng::GatewayError, 'Bad response 429'},
+          proc {{}},
+        ].each do |reply|
+          service, calls = stub_login(reply)
+          results = Array.new(4) {Thread.new {login_result(service)}}.map(&:value)
+
+          assert_equal(1, calls.size)
+          assert(results.all?(Ginseng::AuthError))
+          assert_nil(service.instance_variable_get(:@jwt))
+        end
+      end
+
+      # ⚠ 待ち始める前に終わった失敗は上げ直さない。次の呼び出しはログインし直す。
+      def test_login_retries_after_failure
+        service, calls = stub_login(proc {raise Ginseng::GatewayError, 'Bad response 503'})
+
+        2.times {assert_kind_of(Ginseng::AuthError, login_result(service))}
+
+        assert_equal(2, calls.size)
+      end
+
+      # 🔴 **JSON でない応答の本文から JWT を読まない (#30)。** `HTTParty::Response#[]` は
+      # 中身へ委譲するので、文字列の本文では `String#[]` になる。
+      def test_login_rejects_non_json_response
+        body = '<html>login with jwt</html>'
+        request = HTTParty::Request.new(Net::HTTP::Post, 'https://piefed.example/')
+        response = HTTParty::Response.new(request, Net::HTTPOK.new('1.1', '200', 'OK'), -> {body}, body:)
+        service, = stub_login(proc {response})
+
+        assert_kind_of(Ginseng::AuthError, login_result(service))
+        assert_nil(service.instance_variable_get(:@jwt))
+      end
+
+      # ⚠⚠ **資格情報を出さない (#35)。** 既定の `inspect` / `as_json` は ivar を並べる。
+      def test_inspect_and_json_hide_credentials
+        service = Service.new(url: "https://#{@host}/c/hoge", user: 'user', password: 'pw-SECRET')
+        service.instance_variable_set(:@jwt, 'JWT-SECRET')
+
+        [service.inspect, service.to_json, {service:}.to_json].each do |dumped|
+          assert_includes(dumped, @host)
+          refute_includes(dumped, 'pw-SECRET')
+          refute_includes(dumped, 'JWT-SECRET')
+        end
+        assert_equal({host: @host, user: 'user'}, service.as_json)
+      end
+
       # 公開でないトゥートのクリップは、例外にせず投稿もしない。
       # ⚠ 通信しない形で測る — ログイン済みにし、トゥートの URI と HTTP を差し替える。
       def test_clip_skips_non_public_status
@@ -156,6 +205,27 @@ module Ginseng
       # `PiefedShrieker` は**まだ書いていない**（他の Shrieker 5 本は書いている）。
       def test_http_class_is_honored
         assert_instance_of(StubHTTP, StubService.new(url: "https://#{@host}/c/hoge").http)
+      end
+
+      private
+
+      # HTTP の `post` を、少し待ってから `reply` を返す（または上げる）ものに差し替える。
+      def stub_login(reply)
+        service = Service.new(url: "https://#{@host}/c/hoge", user: 'user', password: 'secret')
+        calls = Queue.new
+        service.http.define_singleton_method(:post) do |*|
+          calls.push(true)
+          sleep(0.1)
+          next reply.call
+        end
+        return service, calls
+      end
+
+      def login_result(service)
+        service.login
+        return :ok
+      rescue => e
+        return e
       end
     end
   end

@@ -15,8 +15,13 @@ module Ginseng
           @body = ''
         end
 
+        # ⚠ `login` は `parsed_response` から JWT を読む（`HTTParty::Response` と同じ口を持たせる）。
+        def parsed_response
+          return {'jwt' => 'jwt', 'communities' => [], 'next_page' => nil}
+        end
+
         def [](key)
-          return {'jwt' => 'jwt', 'communities' => [], 'next_page' => nil}[key]
+          return parsed_response[key]
         end
       end
 
