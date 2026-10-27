@@ -5,6 +5,8 @@ module Ginseng
 
       attr_reader :http
 
+      JWT_PATTERN = /\A[A-Za-z0-9_.-]+\z/
+
       def initialize(params = {})
         @params = params.deep_symbolize_keys
         @logger = logger_class.new
@@ -146,13 +148,15 @@ module Ginseng
       # ⚠⚠ `response['jwt']` と書かない。`HTTParty::Response#[]` は中身へ委譲するので、
       # JSON でない応答では `String#[]` になり、**本文に `jwt` の字があればそれを JWT と読む**
       # （実測: `<html>login with jwt</html>` で `"jwt"`）。
+      # ⚠ JWT の字（base64url と `.`）だけを受ける。改行入りの値は `clip` の Authorization で
+      # Net::HTTP に拒まれ、**その例外の文言に値がそのまま載っていた**（ログのマスクも外れる）。
       # 🔴 **壊れた JSON の本文を例外に載せない。** `parsed_response` は読んだ時点で解析し、
       # `JSON::ParserError` のメッセージは入力をそのまま含む（実測: `{"jwt": "…", broken` で
       # JWT ごと載った）。
       def extract_jwt(response)
         data = response.respond_to?(:parsed_response) ? response.parsed_response : response
         jwt = data['jwt'] if data.is_a?(Hash)
-        return jwt if jwt.is_a?(String) && jwt.present?
+        return jwt if jwt.is_a?(String) && jwt.match?(JWT_PATTERN)
         raise Ginseng::AuthError, 'login: no jwt in the response'
       rescue JSON::ParserError
         raise Ginseng::AuthError, 'login: unreadable response'

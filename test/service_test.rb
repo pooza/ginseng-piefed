@@ -61,6 +61,7 @@ module Ginseng
           proc {{}},
           proc {{'jwt' => ''}},
           proc {{'jwt' => 123}},
+          proc {{'jwt' => "abc\r\nX-Evil: 1"}},
         ].each do |reply|
           service, calls = stub_login(reply)
           results = Array.new(4) {Thread.new {login_result(service)}}.map(&:value)
