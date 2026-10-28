@@ -12,7 +12,6 @@ module Ginseng
         @logger = logger_class.new
         @config = config_class.instance
         @login_mutex = Mutex.new
-        @login_attempts = 0
         # ⚠⚠ **`HTTP` と直に書かない (#15)。** 字面どおり `Ginseng::HTTP` に解決される
         # ので、**利用側が `http_class` を差し替えても黙って無視される**。
         # ⚠ 差が出るのは `logger_class` / `config_class` / `environment_class` の側 —
@@ -57,17 +56,20 @@ module Ginseng
       # 使う（tomato-shrieker の `Parallel.each`）。`@jwt` が入る前に並んだスレッドが、それぞれ
       # ログインしていた。⚠ 取った後にもう一度 `@jwt` を見る（待っていた側は通信しない）。
       #
-      # 🔴 **失敗したときも、待っていた側は通信しない (#36)。** 待っていたスレッドがロックを
-      # 取るたびにログインし直し、待ち時間が「HTTP の締切 × 再試行 × スレッド数」まで直列に
+      # 🔴 **失敗したら、このインスタンスではログインし直さない (#36 / #39)。** 待っていたスレッドが
+      # ロックを取るたびにログインし直し、待ち時間が「HTTP の締切 × 再試行 × スレッド数」まで直列に
       # 伸びていた（PieFed が落ちている・429 を返しているときに、直列に 4 回叩く）。
-      # ⚠ 試行に番号を振る。待ち始めた後に終わった試行があれば、その失敗を上げ直す。
-      # ⚠ 待ち始める前に失敗していた試行は上げ直さない（次の呼び出しはログインし直す）。
+      # ⚠⚠ **待っていた間だけ共有する形（0.5.0）では足りなかった (#39)。** 利用側はエントリごとに
+      # `login` を呼ぶので、失敗した本人が次のエントリでロックを取り直し、ほとんど減らなかった
+      # （実測 12 回 → 9 回。Ruby の Mutex は FIFO でない）。
+      # 🔴 **寿命の長いインスタンスでは、一度の失敗でずっとログインできなくなる。** いまの利用側は
+      # どちらも短い（tomato-shrieker は run ごと、mulukhiya-toot-proxy はジョブ・リクエストごとに
+      # 作り直す）。長く持つ利用側が出たら、覚える期間を区切る。
       def login
         return if @jwt
-        attempts = @login_attempts
         @login_mutex.synchronize do
           return if @jwt
-          raise @login_error if @login_error && @login_attempts != attempts
+          raise @login_error if @login_error
           attempt_login
         end
       rescue => e
@@ -126,12 +128,9 @@ module Ginseng
 
       private
 
-      # ⚠ ロックの中で呼ぶ。成否にかかわらず試行の番号を進める（`login` を参照）。
-      # ⚠⚠ **前の失敗は試行の頭で消す。** `Thread#kill` や `Timeout` で中断された試行は
-      # `rescue` を通らないので、消さないと番号だけが進み、待っていた側が**その試行と
-      # 関係の無い前の失敗**を上げ直す。
+      # ⚠ ロックの中で呼ぶ。⚠ `Thread#kill` や `Timeout` で中断された試行は `rescue` を通らないので
+      # 失敗として覚えない（次の呼び出しはログインし直す）。
       def attempt_login
-        @login_error = nil
         response = http.post("/api/#{api_version}/user/login", {
           body: {username:, password:},
         })
@@ -139,8 +138,6 @@ module Ginseng
       rescue => e
         @login_error = e
         raise
-      ensure
-        @login_attempts += 1
       end
 
       # 🔴 **JWT が取れなければ失敗にする (#30 の 2 項目め)。** `@jwt = nil` のまま例外なしで
