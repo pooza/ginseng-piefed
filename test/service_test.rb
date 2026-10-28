@@ -72,13 +72,29 @@ module Ginseng
         end
       end
 
-      # ⚠ 待ち始める前に終わった失敗は上げ直さない。次の呼び出しはログインし直す。
-      def test_login_retries_after_failure
-        service, calls = stub_login(proc {raise Ginseng::GatewayError, 'Bad response 503'})
+      # 🔴 **失敗したら、このインスタンスではログインし直さない (#39)。** 利用側はエントリごとに
+      # `login` を呼ぶ（tomato-shrieker の `Parallel.each`）。0.5.0 は待っていた間だけ共有したので、
+      # 失敗した本人が次のエントリでロックを取り直し、ほとんど減らなかった。
+      def test_login_failure_is_remembered
+        service, calls = stub_login(proc {raise Ginseng::GatewayError, 'Bad response 429'})
+        entries = Queue.new
+        12.times {entries.push(true)}
+        threads = Array.new(4) do
+          Thread.new do
+            results = []
+            loop do
+              entries.pop(true)
+              results.push(login_result(service))
+            rescue ThreadError
+              break results
+            end
+          end
+        end
+        results = threads.flat_map(&:value)
 
-        2.times {assert_kind_of(Ginseng::AuthError, login_result(service))}
-
-        assert_equal(2, calls.size)
+        assert_equal(12, results.size)
+        assert(results.all?(Ginseng::AuthError))
+        assert_equal(1, calls.size)
       end
 
       # 🔴 **JSON でない応答の本文から JWT を読まない (#30)。** `HTTParty::Response#[]` は
@@ -107,17 +123,14 @@ module Ginseng
         refute_includes(error.message, 'JWT-SECRET')
       end
 
-      # ⚠⚠ **中断された試行のあと、待っていた側は前の失敗を上げ直さない。**
-      # 中断（`Exception` 系）は `rescue` を通らず、番号だけが進む。
+      # ⚠⚠ **中断された試行は失敗として覚えない。** 中断（`Exception` 系）は `rescue` を通らない。
       def test_login_after_interrupted_attempt
         interrupt = Class.new(Exception) # rubocop:disable Lint/InheritException
         replies = Queue.new
-        replies.push(proc {raise Ginseng::GatewayError, 'Bad response 503'})
         replies.push(proc {raise interrupt})
         replies.push(proc {{'jwt' => 'jwt'}})
         service, calls = stub_login(proc {replies.pop.call})
 
-        assert_kind_of(Ginseng::AuthError, login_result(service))
         owner = Thread.new do
           service.login
         rescue interrupt
@@ -128,7 +141,7 @@ module Ginseng
 
         assert_equal(:interrupted, owner.value)
         assert_equal(:ok, waiter.value)
-        assert_equal(3, calls.size)
+        assert_equal(2, calls.size)
       end
 
       # 🔴 **資格情報を出さない (#35)。** 既定の `inspect` / `as_json` は ivar を並べる。
