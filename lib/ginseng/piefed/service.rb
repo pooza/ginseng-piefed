@@ -40,9 +40,11 @@ module Ginseng
       # サーバーごとに版が違いうる。⚠ `params` に無い（nil・空文字）ときは従来どおり config の値。
       # ⚠ 空文字を既定へ倒すのは、そのままだとパスが `/api//post` になるため。
       #
-      # 🔴 **パスに埋め込むので形を検査する。** `/` や `..` が入ると、同じホストの別の口へ
-      # `Authorization: Bearer` を載せたまま届く。⚠ 先頭を `.` にさせないので `.` / `..` の
-      # セグメントにはならない。⚠ config の値も同じ規則で見る（口ごとに規則を分けない）。
+      # ⚠⚠ **パスに埋め込むので形を検査する。** `/` や `..` が入ると、同じホストの別の口へ
+      # 資格情報（`clip` / `communities` は Bearer、`login` はパスワード）を載せたまま届く。
+      # ⚠ 先頭を `.` にさせないので `.` / `..` のセグメントにはならない。⚠ config の値も同じ規則で
+      # 見る（口ごとに規則を分けない）。⚠ 形に合わなければ `ConfigError`（`login` でも `AuthError` に
+      # 包まない）。
       def api_version
         version = @params[:api_version].to_s
         version = @config['/piefed/api/version'].to_s if version.empty?
@@ -83,6 +85,10 @@ module Ginseng
           raise @login_error if @login_error
           attempt_login
         end
+      rescue Ginseng::ConfigError
+        # ⚠ 設定の誤り（`api_version` の形）は認証の失敗に見せない（0.7.0 のリリース前レビュー）。
+        # 包むと 403 の `AuthError` として束ねられる。
+        raise
       rescue => e
         raise Ginseng::AuthError, e.message, e.backtrace
       end
