@@ -6,6 +6,7 @@ module Ginseng
       attr_reader :http
 
       JWT_PATTERN = /\A[A-Za-z0-9_.-]+\z/
+      API_VERSION_PATTERN = /\A[A-Za-z0-9_-][A-Za-z0-9_.-]*\z/
 
       def initialize(params = {})
         @params = params.deep_symbolize_keys
@@ -35,8 +36,18 @@ module Ginseng
         @logger.info(clipper: self.class.to_s, method: __method__, url: uri.to_s)
       end
 
+      # 宛先ごとに API の版を持てる (#47)。1 つのアプリが複数の PieFed へ投稿すると、
+      # サーバーごとに版が違いうる。⚠ `params` に無い（nil・空文字）ときは従来どおり config の値。
+      # ⚠ 空文字を既定へ倒すのは、そのままだとパスが `/api//post` になるため。
+      #
+      # 🔴 **パスに埋め込むので形を検査する。** `/` や `..` が入ると、同じホストの別の口へ
+      # `Authorization: Bearer` を載せたまま届く。⚠ 先頭を `.` にさせないので `.` / `..` の
+      # セグメントにはならない。⚠ config の値も同じ規則で見る（口ごとに規則を分けない）。
       def api_version
-        return @config['/piefed/api/version']
+        version = @params[:api_version].to_s
+        version = @config['/piefed/api/version'].to_s if version.empty?
+        return version if version.match?(API_VERSION_PATTERN)
+        raise Ginseng::ConfigError, "invalid PieFed API version: #{version.inspect}"
       end
 
       def uri

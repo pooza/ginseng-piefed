@@ -26,6 +26,42 @@ module Ginseng
         assert_equal(Config.instance['/piefed/api/version'], @service.api_version)
       end
 
+      # ⚠ 期待値は literal で書く（config から作ると、params を無視しても緑になる）。
+      def test_api_version_from_params
+        assert_equal('v2', Service.new(url: "https://#{@host}/", api_version: 'v2').api_version)
+        assert_equal('v2', Service.new('url' => "https://#{@host}/", 'api_version' => 'v2').api_version)
+        assert_equal('1.0.alpha_2', Service.new(url: "https://#{@host}/", api_version: '1.0.alpha_2').api_version)
+      end
+
+      def test_api_version_falls_back_to_config
+        [nil, ''].each do |version|
+          service = Service.new(url: "https://#{@host}/", api_version: version)
+
+          assert_equal(Config.instance['/piefed/api/version'], service.api_version)
+        end
+      end
+
+      def test_api_version_rejects_path_segments
+        ['..', '.', '../v2', 'v2/../../admin', 'a/b', 'v2?x=1', 'v2#x', ' v2', 'v2%2F'].each do |version|
+          service = Service.new(url: "https://#{@host}/", api_version: version)
+
+          assert_raises(Ginseng::ConfigError, version) {service.api_version}
+        end
+      end
+
+      # 🔴 投稿の URL に params の版が実際に載ることを、HTTP の出口で測る。
+      def test_api_version_reaches_the_request_path
+        service = Service.new(url: "https://#{@host}/", api_version: 'v9')
+        paths = []
+        service.http.define_singleton_method(:post) do |path, *|
+          paths.push(path)
+          raise Ginseng::GatewayError, 'stop'
+        end
+        assert_raises(Ginseng::AuthError, Ginseng::GatewayError) {service.login}
+
+        assert_equal(['/api/v9/user/login'], paths)
+      end
+
       def test_uri
         assert_equal(@host, @service.uri.host)
         assert_equal('https', @service.uri.scheme)
