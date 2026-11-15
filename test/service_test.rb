@@ -49,7 +49,32 @@ module Ginseng
         end
       end
 
-      # 🔴 投稿の URL に params の版が実際に載ることを、HTTP の出口で測る。
+      # 🔴 要求のパスに params の版が実際に載ることを、HTTP の出口で測る。⚠ `login` で測る
+      # （`clip` / `communities` も同じ `api_version` からパスを作る）。
+      # ⚠ config の値も同じ規則で見る。⚠ 期待値は literal。
+      def test_api_version_rejects_bad_config
+        service = Service.new(url: "https://#{@host}/")
+        service.instance_variable_set(:@config, {'/piefed/api/version' => '../admin'})
+
+        assert_raises(Ginseng::ConfigError) {service.api_version}
+
+        # ⚠ params に版があれば config の値は使わない（検査もしない）。
+        service = Service.new(url: "https://#{@host}/", api_version: 'v3')
+        service.instance_variable_set(:@config, {'/piefed/api/version' => '../admin'})
+
+        assert_equal('v3', service.api_version)
+      end
+
+      # ⚠ 形の誤りは `login` でも `ConfigError` のまま（`AuthError` に包まない）。2 回目も同じ。
+      def test_bad_api_version_is_not_an_auth_error
+        service = Service.new(url: "https://#{@host}/", api_version: '../x', user: 'u', password: 'p')
+        posted = 0
+        service.http.define_singleton_method(:post) {|*| posted += 1}
+
+        2.times {assert_raises(Ginseng::ConfigError) {service.login}}
+        assert_equal(0, posted)
+      end
+
       def test_api_version_reaches_the_request_path
         service = Service.new(url: "https://#{@host}/", api_version: 'v9')
         paths = []
